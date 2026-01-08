@@ -1,7 +1,11 @@
 ﻿import re
+import io
+import base64
+import os
 from typing import Dict, List
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -15,6 +19,11 @@ load_dotenv()
 client = OpenAI()
 
 MAX_TURNS = 6  # keep only the last few user/assistant messages for short-term memory
+COMPONENT_PATH = os.path.join(os.path.dirname(__file__), "components", "voice_chat_input")
+voice_chat_input = components.declare_component(
+    "voice_chat_input",
+    path=COMPONENT_PATH,
+)
 
 
 st.markdown(
@@ -103,38 +112,43 @@ div[data-testid="stVerticalBlock"]:has(.hero-marker) {
   height: 64px;
 }
 
-.pill-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  margin-top: 1rem;
+div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] {
+  margin-right: 0.4rem;
 }
 
 div[data-testid="stButton"] > button {
   font-family: 'Manrope', sans-serif;
-  font-size: 0.7rem;
-  padding: 0.22rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.15;
+  padding: 0.28rem 0.7rem;
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.08);
-  border: 1px solid rgba(15, 118, 110, 0.2);
-  color: #0f766e;
-  box-shadow: none;
+  background: linear-gradient(180deg, rgba(15, 118, 110, 0.14), rgba(15, 118, 110, 0.04));
+  border: 1px solid rgba(15, 118, 110, 0.35);
+  color: #0b5f5a;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease;
+  width: 100%;
+  white-space: normal;
+  text-align: center;
 }
 
 div[data-testid="stButton"] > button:hover {
-  background: rgba(15, 118, 110, 0.16);
-  border-color: rgba(15, 118, 110, 0.35);
+  transform: translateY(-1px);
+  background: linear-gradient(180deg, rgba(15, 118, 110, 0.24), rgba(15, 118, 110, 0.08));
+  border-color: rgba(15, 118, 110, 0.5);
+  box-shadow: 0 10px 18px rgba(15, 23, 42, 0.12);
 }
 
 div[data-testid="stButton"] > button[kind="primary"] {
-  background: rgba(245, 158, 11, 0.18);
-  border-color: rgba(245, 158, 11, 0.45);
-  color: #b45309;
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.3), rgba(245, 158, 11, 0.12));
+  border-color: rgba(245, 158, 11, 0.6);
+  color: #92400e;
 }
 
 div[data-testid="stButton"] > button[kind="primary"]:hover {
-  background: rgba(245, 158, 11, 0.28);
-  border-color: rgba(245, 158, 11, 0.6);
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.42), rgba(245, 158, 11, 0.2));
+  border-color: rgba(245, 158, 11, 0.75);
 }
 
 div[data-testid="stChatMessageContent"] {
@@ -185,6 +199,10 @@ def add_to_history(role: str, content: str) -> None:
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history: List[Dict[str, str]] = []
+if "last_input_id" not in st.session_state:
+    st.session_state.last_input_id = None
+if "last_transcript" not in st.session_state:
+    st.session_state.last_transcript = ""
 
 pill_labels = [
     ("Benefits and leave", "secondary"),
@@ -209,35 +227,53 @@ with hero_container:
       I can only answer HR-related topics and I do not store personal data long-term.
     </p>
   </div>
-  <div class="hero-avatar" aria-hidden="true">
-    <svg viewBox="0 0 96 96" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <rect x="18" y="22" width="60" height="52" rx="14" fill="#0f172a"/>
-      <rect x="24" y="30" width="48" height="34" rx="10" fill="#e2e8f0"/>
-      <circle cx="38" cy="47" r="6" fill="#0f766e"/>
-      <circle cx="58" cy="47" r="6" fill="#0f766e"/>
-      <rect x="36" y="58" width="24" height="6" rx="3" fill="#0f172a"/>
-      <rect x="44" y="12" width="8" height="10" rx="4" fill="#f59e0b"/>
-      <circle cx="48" cy="10" r="6" fill="#f59e0b"/>
-    </svg>
-  </div>
 </div>
 """,
         unsafe_allow_html=True,
     )
-    st.markdown('<div class="pill-row">', unsafe_allow_html=True)
     cols = st.columns(len(pill_labels))
     for idx, (label, style) in enumerate(pill_labels):
         if cols[idx].button(label, key=f"pill-{idx}", type=style):
             selected_prompt = label
-    st.markdown("</div>", unsafe_allow_html=True)
 
 # Display existing history
 for message in st.session_state.chat_history:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
-question = st.chat_input("Ask an HR question")
-input_text = selected_prompt or question
+voice_reply = True
+payload = voice_chat_input(
+    placeholder="Ask an HR question",
+    key="voice_chat_input",
+    height=70,
+)
+
+input_text = None
+if selected_prompt:
+    input_text = selected_prompt
+elif payload and payload.get("id") != st.session_state.last_input_id:
+    st.session_state.last_input_id = payload.get("id")
+    kind = payload.get("kind")
+    if kind == "text":
+        input_text = (payload.get("text") or "").strip()
+    elif kind == "audio":
+        audio_b64 = payload.get("data") or ""
+        if audio_b64:
+            try:
+                audio_bytes = base64.b64decode(audio_b64)
+                audio_file = io.BytesIO(audio_bytes)
+                audio_file.name = "voice.webm"
+                transcription = client.audio.transcriptions.create(
+                    model="gpt-4o-mini-transcribe",
+                    file=audio_file,
+                )
+                st.session_state.last_transcript = transcription.text.strip()
+                input_text = st.session_state.last_transcript
+                if input_text:
+                    st.caption(f"Transcribed: {input_text}")
+            except Exception as exc:
+                st.session_state.last_transcript = ""
+                st.error(f"Transcription error: {exc}")
 
 if input_text:
     user_message = anonymize(input_text)
@@ -278,3 +314,13 @@ if input_text:
 
         with st.chat_message("assistant"):
             st.markdown(assistant_reply)
+            if voice_reply:
+                try:
+                    speech = client.audio.speech.create(
+                        model="gpt-4o-mini-tts",
+                        voice="sage",
+                        input=assistant_reply,
+                    )
+                    st.audio(speech.content, format="audio/mp3")
+                except Exception as exc:
+                    st.error(f"Voice reply error: {exc}")

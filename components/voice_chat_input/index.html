@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Voice Chat Input</title>
+    <style>
+      :root {
+        color-scheme: light;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Manrope", "Segoe UI", Arial, sans-serif;
+      }
+
+      .bar {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.55rem 0.65rem;
+        background: #ffffff;
+        border: 1px solid rgba(15, 23, 42, 0.14);
+        border-radius: 16px;
+        box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+      }
+
+      .bar input {
+        flex: 1;
+        border: none;
+        outline: none;
+        font-size: 1rem;
+        padding: 0.2rem 2.75rem 0.2rem 0.2rem;
+        background: transparent;
+        color: #0f172a;
+      }
+
+      .record {
+        position: absolute;
+        right: 3.4rem;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 32px;
+        height: 32px;
+        border-radius: 999px;
+        border: 1px solid rgba(15, 23, 42, 0.2);
+        background: #ffffff;
+        display: grid;
+        place-items: center;
+        cursor: pointer;
+        transition: box-shadow 150ms ease, border-color 150ms ease;
+      }
+
+      .record svg {
+        width: 16px;
+        height: 16px;
+        fill: #0f766e;
+      }
+
+      .record.active {
+        border-color: rgba(239, 68, 68, 0.6);
+        box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2);
+      }
+
+      .record.active svg {
+        fill: #ef4444;
+      }
+
+      .send {
+        border: 1px solid rgba(15, 23, 42, 0.2);
+        background: rgba(15, 118, 110, 0.08);
+        color: #0f766e;
+        border-radius: 10px;
+        padding: 0.35rem 0.6rem;
+        font-size: 0.85rem;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="bar">
+      <input id="textInput" type="text" placeholder="Ask an HR question" />
+      <button id="recordBtn" class="record" type="button" aria-label="Record">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            d="M12 2c-1.66 0-3 1.34-3 3v6c0 1.66 1.34 3 3 3s3-1.34 3-3V5c0-1.66-1.34-3-3-3zm5 9a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.93V20H9v2h6v-2h-2v-2.07A7 7 0 0 0 19 11h-2z"
+          />
+        </svg>
+      </button>
+      <button id="sendBtn" class="send" type="button">Send</button>
+    </div>
+    <script>
+      const Streamlit = {
+        setComponentValue: (value) => {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setComponentValue",
+              value,
+            },
+            "*"
+          );
+        },
+        setFrameHeight: (height) => {
+          window.parent.postMessage(
+            {
+              isStreamlitMessage: true,
+              type: "streamlit:setFrameHeight",
+              height,
+            },
+            "*"
+          );
+        },
+        onRender: (handler) => {
+          window.addEventListener("message", (event) => {
+            const data = event.data;
+            if (data && data.type === "streamlit:render") {
+              handler({ detail: data });
+            }
+          });
+        },
+      };
+
+      window.parent.postMessage(
+        {
+          isStreamlitMessage: true,
+          type: "streamlit:componentReady",
+          apiVersion: 1,
+        },
+        "*"
+      );
+
+      Streamlit.setFrameHeight(70);
+
+      const input = document.getElementById("textInput");
+      const recordBtn = document.getElementById("recordBtn");
+      const sendBtn = document.getElementById("sendBtn");
+      let recorder = null;
+      let chunks = [];
+      let recording = false;
+
+      function sendValue(payload) {
+        payload.id = Date.now();
+        Streamlit.setComponentValue(payload);
+      }
+
+      Streamlit.onRender((event) => {
+        const data = event.detail || {};
+        if (data.args && data.args.placeholder) {
+          input.placeholder = data.args.placeholder;
+        }
+      });
+
+      sendBtn.addEventListener("click", () => {
+        const text = input.value.trim();
+        if (!text) {
+          return;
+        }
+        sendValue({ kind: "text", text });
+        input.value = "";
+      });
+
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          sendBtn.click();
+        }
+      });
+
+      recordBtn.addEventListener("click", async () => {
+        if (recording && recorder) {
+          recorder.stop();
+          return;
+        }
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          recorder = new MediaRecorder(stream);
+          chunks = [];
+
+          recorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              chunks.push(event.data);
+            }
+          };
+
+          recorder.onstop = () => {
+            stream.getTracks().forEach((track) => track.stop());
+            const blob = new Blob(chunks, {
+              type: recorder.mimeType || "audio/webm",
+            });
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const result = reader.result || "";
+              const base64 = result.split(",")[1] || "";
+              sendValue({ kind: "audio", mime: blob.type, data: base64 });
+            };
+            reader.readAsDataURL(blob);
+            recordBtn.classList.remove("active");
+            recording = false;
+          };
+
+          recorder.start();
+          recording = true;
+          recordBtn.classList.add("active");
+        } catch (error) {
+          console.error(error);
+        }
+      });
+    </script>
+  </body>
+</html>
