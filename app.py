@@ -1,4 +1,4 @@
-import re
+﻿import re
 from typing import Dict, List
 
 import streamlit as st
@@ -32,7 +32,7 @@ def add_to_history(role: str, content: str) -> None:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history: List[Dict[str, str]] = []
 
-st.title("🇨🇦 HR Assistant")
+st.title("HR Assistant")
 
 # Display existing history
 for message in st.session_state.chat_history:
@@ -46,7 +46,8 @@ if question:
     with st.chat_message("user"):
         st.markdown(user_message)
 
-    if not is_hr_related(question):
+    hr_ok, _reason = is_hr_related(question, client)
+    if not hr_ok:
         with st.chat_message("assistant"):
             st.markdown("I can only help with HR-related questions.")
     else:
